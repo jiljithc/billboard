@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AdSpace - Billboard Expiration Tracker</title>
+    
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Leaflet CSS & JS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <!-- jiljith   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script> -->
+<script src="https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_MAPS_API_KEY"></script>
+    <style>
+        .custom-pin {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            border-radius: 9999px;
+            color: white;
+            font-weight: bold;
+            font-size: 11px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+            border: 2px solid white;
+        }
+        .pin-expired { background: #ef4444; animation: pulse-ring 1.5s infinite; }
+        .pin-soon { background: #f97316; }
+        .pin-pending { background: #eab308; }
+        .pin-active { background: #3b82f6; }
+        .pin-vacant { background: #10b981; }
+
+        @keyframes pulse-ring {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 flex flex-col h-screen overflow-hidden">
+
+    <!-- Top Navigation -->
+    <header class="bg-slate-900 border-b border-slate-800 px-6 py-3 flex items-center justify-between z-10">
+        <div class="flex items-center space-x-3">
+            <div class="h-9 w-9 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-lg">Ad</div>
+            <div>
+                <h1 class="font-bold text-lg text-white">AdSpace Tracker</h1>
+                <p class="text-xs text-slate-400">Spring Boot OOH Inventory & Expiration Management</p>
+            </div>
+        </div>
+
+        <!-- KPI Pill Counters -->
+        <div class="flex items-center space-x-3 text-xs">
+            <span class="px-3 py-1 rounded-full bg-red-950/60 text-red-400 border border-red-800/50">Expired: <b id="count-expired">0</b></span>
+            <span class="px-3 py-1 rounded-full bg-orange-950/60 text-orange-400 border border-orange-800/50">&le;14 Days: <b id="count-soon">0</b></span>
+            <span class="px-3 py-1 rounded-full bg-amber-950/60 text-amber-400 border border-amber-800/50">Pending: <b id="count-pending">0</b></span>
+            <span class="px-3 py-1 rounded-full bg-emerald-950/60 text-emerald-400 border border-emerald-800/50">Vacant: <b id="count-vacant">0</b></span>
+        </div>
+
+        <button onclick="document.getElementById('addModal').classList.remove('hidden')" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-semibold transition">
+            + Add Billboard
+        </button>
+    </header>
+
+    <!-- Main Workspace -->
+    <div class="flex flex-1 overflow-hidden">
+        
+        <!-- Sidebar Directory -->
+        <aside class="w-96 bg-slate-900 border-r border-slate-800 flex flex-col">
+            <div class="p-4 border-b border-slate-800 space-y-2">
+                <input id="searchInput" type="text" placeholder="Search boards or advertisers..." class="w-full bg-slate-800 border border-slate-700 px-3 py-2 rounded-lg text-sm focus:outline-none focus:border-indigo-500" oninput="filterBoards()"/>
+                
+                <div class="flex space-x-2">
+                    <select id="areaFilter" class="w-1/2 bg-slate-800 border border-slate-700 text-xs rounded-lg px-2 py-1.5 focus:outline-none" onchange="filterBoards()">
+                        <option value="ALL">All Areas</option>
+                    </select>
+
+                    <select id="statusFilter" class="w-1/2 bg-slate-800 border border-slate-700 text-xs rounded-lg px-2 py-1.5 focus:outline-none" onchange="filterBoards()">
+                        <option value="ALL">All Statuses</option>
+                        <option value="EXPIRED">Expired</option>
+                        <option value="EXPIRING_SOON">&le; 14 Days</option>
+                        <option value="PENDING_RENEWAL">15 - 30 Days</option>
+                        <option value="ACTIVE">Active (>30d)</option>
+                        <option value="VACANT">Vacant</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Scrollable Board List -->
+            <div id="boardList" class="flex-1 overflow-y-auto divide-y divide-slate-800/60"></div>
+        </aside>
+
+        <!-- Map Container -->
+        <div id="map" class="flex-1 h-full z-0"></div>
+    </div>
+
+    <!-- Renewal / Details Drawer Modal -->
+    <div id="renewModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <h3 class="text-lg font-bold text-white flex justify-between items-center">
+                <span>Renew Billboard Lease</span>
+                <button onclick="closeRenewModal()" class="text-slate-400 hover:text-white">&times;</button>
+            </h3>
+            <p id="renewModalSubtitle" class="text-xs text-slate-400"></p>
+
+            <form id="renewForm" onsubmit="submitRenewal(event)" class="space-y-3">
+                <input type="hidden" id="renewBoardId" />
+                <div>
+                    <label class="text-xs font-semibold text-slate-300">Advertiser</label>
+                    <input id="renewAdvertiser" type="text" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-sm mt-1" required />
+                </div>
+                <div>
+                    <label class="text-xs font-semibold text-slate-300">Campaign Name</label>
+                    <input id="renewCampaign" type="text" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-sm mt-1" required />
+                </div>
+                <div>
+                    <label class="text-xs font-semibold text-slate-300">Extend By</label>
+                    <select id="renewMonths" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-sm mt-1">
+                        <option value="1">1 Month</option>
+                        <option value="3">3 Months</option>
+                        <option value="6" selected>6 Months</option>
+                        <option value="12">12 Months (1 Year)</option>
+                    </select>
+                </div>
+                <div class="flex justify-end space-x-2 pt-2">
+                    <button type="button" onclick="closeRenewModal()" class="px-4 py-2 bg-slate-800 rounded-lg text-xs hover:bg-slate-700">Cancel</button>
+                    <button type="submit" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-xs font-bold">Apply Renewal</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Add Billboard Modal -->
+    <div id="addModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl max-w-lg w-full p-6 space-y-4 shadow-2xl">
+            <h3 class="text-lg font-bold text-white flex justify-between items-center">
+                <span>Register New Billboard Location</span>
+                <button onclick="document.getElementById('addModal').classList.add('hidden')" class="text-slate-400 hover:text-white">&times;</button>
+            </h3>
+            <form id="addForm" onsubmit="submitAddBillboard(event)" class="space-y-3 text-xs">
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="text-slate-300">Board Code</label>
+                        <input id="newCode" required placeholder="e.g. BLB-201" class="w-full bg-slate-800 border border-slate-700 p-2 rounded mt-1" />
+                    </div>
+                    <div>
+                        <label class="text-slate-300">Area / Neighborhood</label>
+                        <input id="newArea" required placeholder="e.g. Central Town" class="w-full bg-slate-800 border border-slate-700 p-2 rounded mt-1" />
+                    </div>
+                </div>
+                <div>
+                    <label class="text-slate-300">Title</label>
+                    <input id="newTitle" required placeholder="e.g. Metro Junction Mega Screen" class="w-full bg-slate-800 border border-slate-700 p-2 rounded mt-1" />
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="text-slate-300">Latitude</label>
+                        <input id="newLat" type="number" step="any" required placeholder="40.7128" class="w-full bg-slate-800 border border-slate-700 p-2 rounded mt-1" />
+                    </div>
+                    <div>
+                        <label class="text-slate-300">Longitude</label>
+                        <input id="newLng" type="number" step="any" required placeholder="-74.0060" class="w-full bg-slate-800 border border-slate-700 p-2 rounded mt-1" />
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="text-slate-300">Billboard Type</label>
+                        <select id="newType" class="w-full bg-slate-800 border border-slate-700 p-2 rounded mt-1">
+                            <option value="UNIPOLE">UNIPOLE</option>
+                            <option value="DIGITAL_LED">DIGITAL_LED</option>
+                            <option value="BUS_SHELTER">BUS_SHELTER</option>
+                            <option value="GANTRY">GANTRY</option>
+                            <option value="ROOFTOP">ROOFTOP</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-slate-300">Dimensions</label>
+                        <input id="newDims" placeholder="40x20 ft" class="w-full bg-slate-800 border border-slate-700 p-2 rounded mt-1" />
+                    </div>
+                </div>
+                <div class="flex justify-end space-x-2 pt-2">
+                    <button type="button" onclick="document.getElementById('addModal').classList.add('hidden')" class="px-4 py-2 bg-slate-800 rounded text-xs hover:bg-slate-700">Cancel</button>
+                    <button type="submit" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded text-xs font-bold">Save Billboard</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- JavaScript Logic -->
+    <script>
+        let map;
+        let markersLayer = L.layerGroup();
+        let allBillboards = [];
+        let markers = [];
+
+        const STATUS_CONFIG = {
+            EXPIRED: { colorClass: 'pin-expired', label: 'Expired', badge: 'bg-red-500/20 text-red-400 border-red-500/30' },
+            EXPIRING_SOON: { colorClass: 'pin-soon', label: 'Expiring Soon', badge: 'bg-orange-500/20 text-orange-400 border-orange-500/30' },
+            PENDING_RENEWAL: { colorClass: 'pin-pending', label: 'Pending Renewal', badge: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' },
+            ACTIVE: { colorClass: 'pin-active', label: 'Active', badge: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
+            VACANT: { colorClass: 'pin-vacant', label: 'Vacant', badge: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' }
+        };
+/* jiljith 2
+        function initMap() {
+            map = L.map('map').setView([40.7306, -73.96], 12);
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; OpenStreetMap &copy; CARTO',
+                maxZoom: 19
+            }).addTo(map);
+
+            markersLayer.addTo(map);
+        }
+            */
+// added jiljith 2
+        function initMap() {
+             map = new google.maps.Map(document.getElementById("map"), {
+                center: { lat: 40.7306, lng: -73.96 },
+                zoom: 12,
+                styles: [ /* optional dark mode styling */ ]
+            });
+}
+
+
+
+        async function fetchAreas() {
+            try {
+                const res = await fetch('/api/billboards/areas');
+                const areas = await res.json();
+                const select = document.getElementById('areaFilter');
+                areas.forEach(area => {
+                    const opt = document.createElement('option');
+                    opt.value = area;
+                    opt.textContent = area;
+                    select.appendChild(opt);
+                });
+            } catch (err) {
+                console.error("Failed to load areas:", err);
+            }
+        }
+
+        async function fetchBillboards() {
+            try {
+                const res = await fetch('/api/billboards');
+                allBillboards = await res.json();
+                updateKpis();
+                filterBoards();
+            } catch (err) {
+                console.error("Failed to fetch billboards:", err);
+            }
+        }
+
+        function updateKpis() {
+            document.getElementById('count-expired').innerText = allBillboards.filter(b => b.status === 'EXPIRED').length;
+            document.getElementById('count-soon').innerText = allBillboards.filter(b => b.status === 'EXPIRING_SOON').length;
+            document.getElementById('count-pending').innerText = allBillboards.filter(b => b.status === 'PENDING_RENEWAL').length;
+            document.getElementById('count-vacant').innerText = allBillboards.filter(b => b.status === 'VACANT').length;
+        }
+
+        function filterBoards() {
+            const query = document.getElementById('searchInput').value.toLowerCase();
+            const area = document.getElementById('areaFilter').value;
+            const status = document.getElementById('statusFilter').value;
+
+            const filtered = allBillboards.filter(b => {
+                const matchQuery = b.title.toLowerCase().includes(query) ||
+                                   b.code.toLowerCase().includes(query) ||
+                                   (b.currentAdvertiser && b.currentAdvertiser.toLowerCase().includes(query));
+                const matchArea = (area === 'ALL' || b.area === area);
+                const matchStatus = (status === 'ALL' || b.status === status);
+                return matchQuery && matchArea && matchStatus;
+            });
+
+            renderSidebar(filtered);
+            renderMap(filtered);
+        }
+
+        function renderSidebar(boards) {
+            const container = document.getElementById('boardList');
+            container.innerHTML = '';
+
+            if (boards.length === 0) {
+                container.innerHTML = `<div class="p-4 text-xs text-slate-500 text-center">No boards match your filter.</div>`;
+                return;
+            }
+
+            boards.forEach(b => {
+                const conf = STATUS_CONFIG[b.status] || STATUS_CONFIG.ACTIVE;
+                const card = document.createElement('div');
+                card.className = 'p-4 hover:bg-slate-800/50 cursor-pointer transition';
+                card.onclick = () => focusBillboard(b.id);
+
+                const expiryInfo = b.isVacant 
+                    ? `<span class="text-emerald-400 font-semibold">Vacant & Ready to Book</span>`
+                    : b.status === 'EXPIRED'
+                        ? `<span class="text-red-400 font-semibold">Expired ${Math.abs(b.daysRemaining)} days ago</span>`
+                        : `<span class="text-slate-300">Expires in <b class="text-white">${b.daysRemaining} days</b> (${b.expiryDate})</span>`;
+
+                card.innerHTML = `
+                    <div class="flex justify-between items-start mb-1">
+                        <span class="text-xs font-mono font-bold text-indigo-400">${b.code}</span>
+                        <span class="text-[10px] px-2 py-0.5 rounded-full border ${conf.badge}">${conf.label}</span>
+                    </div>
+                    <h4 class="font-bold text-sm text-slate-100 line-clamp-1">${b.title}</h4>
+                    <p class="text-xs text-slate-400 mb-2">${b.area} &bull; ${b.type}</p>
+                    <div class="text-xs">${expiryInfo}</div>
+                    ${b.currentAdvertiser ? `<p class="text-xs text-slate-400 mt-1">Client: <span class="text-slate-200">${b.currentAdvertiser}</span></p>` : ''}
+                    <div class="mt-3 flex justify-between items-center text-xs">
+                        <span class="text-slate-400">$${b.monthlyRate ? b.monthlyRate.toLocaleString() : '0'}/mo</span>
+                        <button onclick="event.stopPropagation(); openRenewModal(${b.id})" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 rounded text-[11px]">Renew Lease</button>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+/* jiljith 3
+        function renderMap(boards) {
+            markersLayer.clearLayers();
+
+            boards.forEach(b => {
+                const conf = STATUS_CONFIG[b.status] || STATUS_CONFIG.ACTIVE;
+                const icon = L.divIcon({
+                    className: '',
+                    html: `<div class="custom-pin ${conf.colorClass}">${b.daysRemaining !== null ? (b.daysRemaining < 0 ? '!' : b.daysRemaining) : 'V'}</div>`,
+                    iconSize: [32, 32],
+                    iconAnchor: [16, 16]
+                });
+
+                const marker = L.marker([b.latitude, b.longitude], { icon: icon });
+                marker.bindPopup(`
+                    <div class="text-slate-900 min-w-[200px] text-xs">
+                        <p class="font-bold text-sm mb-1">${b.title}</p>
+                        <p class="text-slate-600 mb-1"><b>ID:</b> ${b.code} (${b.type})</p>
+                        <p class="text-slate-600 mb-1"><b>Area:</b> ${b.area}</p>
+                        <p class="text-slate-600 mb-1"><b>Status:</b> ${conf.label}</p>
+                        <p class="text-slate-600 mb-2"><b>Advertiser:</b> ${b.currentAdvertiser || 'None'}</p>
+                        <button onclick="openRenewModal(${b.id})" class="w-full px-2 py-1 bg-indigo-600 text-white font-bold rounded">Renew / Book</button>
+                    </div>
+                `);
+                markersLayer.addLayer(marker);
+            });
+        }
+*/
+// jiljith 3
+
+function renderMap(boards) {
+    // Clear old markers
+    markers.forEach(m => m.setMap(null));
+    markers = [];
+
+    boards.forEach(b => {
+        const marker = new google.maps.Marker({
+            position: { lat: b.latitude, lng: b.longitude },
+            map: map,
+            title: b.title
+        });
+
+        const infoWindow = new google.maps.InfoWindow({
+            content: `<div><strong>${b.title}</strong><br/>Status: ${b.status}</div>`
+        });
+
+        marker.addListener("click", () => infoWindow.open(map, marker));
+        markers.push(marker);
+    });
+}
+
+
+
+
+        function focusBillboard(id) {
+            const b = allBillboards.find(x => x.id === id);
+            if (b && map) {
+                map.flyTo([b.latitude, b.longitude], 15, { animate: true, duration: 1 });
+            }
+        }
+
+        function openRenewModal(id) {
+            const b = allBillboards.find(x => x.id === id);
+            if (!b) return;
+            document.getElementById('renewBoardId').value = b.id;
+            document.getElementById('renewModalSubtitle').innerText = `${b.title} (${b.code})`;
+            document.getElementById('renewAdvertiser').value = b.currentAdvertiser || '';
+            document.getElementById('renewCampaign').value = b.campaignName || '';
+            document.getElementById('renewModal').classList.remove('hidden');
+        }
+
+        function closeRenewModal() {
+            document.getElementById('renewModal').classList.add('hidden');
+        }
+
+        async function submitRenewal(e) {
+            e.preventDefault();
+            const id = document.getElementById('renewBoardId').value;
+            const payload = {
+                additionalMonths: parseInt(document.getElementById('renewMonths').value),
+                advertiser: document.getElementById('renewAdvertiser').value,
+                campaignName: document.getElementById('renewCampaign').value
+            };
+
+            const res = await fetch(`/api/billboards/${id}/renew`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (res.ok) {
+                closeRenewModal();
+                await fetchBillboards();
+            } else {
+                alert('Failed to renew lease');
+            }
+        }
+
+        async function submitAddBillboard(e) {
+            e.preventDefault();
+            const payload = {
+                code: document.getElementById('newCode').value,
+                title: document.getElementById('newTitle').value,
+                area: document.getElementById('newArea').value,
+                latitude: parseFloat(document.getElementById('newLat').value),
+                longitude: parseFloat(document.getElementById('newLng').value),
+                type: document.getElementById('newType').value,
+                dimensions: document.getElementById('newDims').value,
+                isVacant: true
+            };
+
+            const res = await fetch('/api/billboards', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (res.ok) {
+                document.getElementById('addModal').classList.add('hidden');
+                document.getElementById('addForm').reset();
+                await fetchAreas();
+                await fetchBillboards();
+            } else {
+                alert('Failed to create billboard');
+            }
+        }
+
+        // Initialize application on load
+        window.addEventListener('DOMContentLoaded', () => {
+            initMap();
+            fetchAreas();
+            fetchBillboards();
+        });
+    </script>
+</body>
+</html>

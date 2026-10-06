@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AdSpace - Billboard Expiration Tracker</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Leaflet CSS & JS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            background-color: #020617;
+            color: #f8fafc;
+            overflow: hidden;
+        }
+        #map {
+            width: 100%;
+            height: 100%;
+            min-height: 400px;
+            background: #0f172a;
+        }
+        .custom-pin {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            border-radius: 9999px;
+            color: white;
+            font-weight: bold;
+            font-size: 11px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+            border: 2px solid white;
+        }
+        .pin-expired { background: #ef4444; }
+        .pin-soon { background: #f97316; }
+        .pin-pending { background: #eab308; }
+        .pin-active { background: #3b82f6; }
+        .pin-vacant { background: #10b981; }
+    </style>
+</head>
+<body class="flex flex-col h-screen">
+
+    <!-- Top Navigation -->
+    <header class="bg-slate-900 border-b border-slate-800 px-6 py-3 flex items-center justify-between z-10 shrink-0">
+        <div class="flex items-center space-x-3">
+            <div class="h-9 w-9 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-lg text-white">Ad</div>
+            <div>
+                <h1 class="font-bold text-base text-white">AdSpace Tracker</h1>
+                <p class="text-xs text-slate-400">OOH Billboard Sales & Expiration Map</p>
+            </div>
+        </div>
+
+        <div class="flex items-center space-x-2 text-xs">
+            <span class="px-2.5 py-1 rounded-full bg-red-950/70 text-red-400 border border-red-800/50">Expired: <b id="count-expired">0</b></span>
+            <span class="px-2.5 py-1 rounded-full bg-orange-950/70 text-orange-400 border border-orange-800/50">&le;14d: <b id="count-soon">0</b></span>
+            <span class="px-2.5 py-1 rounded-full bg-amber-950/70 text-amber-400 border border-amber-800/50">Pending: <b id="count-pending">0</b></span>
+            <span class="px-2.5 py-1 rounded-full bg-emerald-950/70 text-emerald-400 border border-emerald-800/50">Vacant: <b id="count-vacant">0</b></span>
+        </div>
+          <button onclick="document.getElementById('addModal').classList.remove('hidden')" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-semibold transition">
+            + Add Billboard
+        </button>
+    </header>
+
+    <!-- Workspace -->
+    <div class="flex flex-1 relative overflow-hidden">
+        <!-- Sidebar -->
+        <aside class="w-80 md:w-96 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0 z-10">
+            <div class="p-3 border-b border-slate-800 space-y-2">
+                <input id="searchInput" type="text" placeholder="Search boards or advertisers..." class="w-full bg-slate-800 border border-slate-700 px-3 py-1.5 rounded text-xs focus:outline-none focus:border-indigo-500 text-white" oninput="filterBoards()"/>
+                <div class="flex space-x-2">
+                    <select id="areaFilter" class="w-1/2 bg-slate-800 border border-slate-700 text-xs text-white rounded p-1.5 focus:outline-none" onchange="filterBoards()">
+                        <option value="ALL">All Areas</option>
+                    </select>
+                    <select id="statusFilter" class="w-1/2 bg-slate-800 border border-slate-700 text-xs text-white rounded p-1.5 focus:outline-none" onchange="filterBoards()">
+                        <option value="ALL">All Statuses</option>
+                        <option value="EXPIRED">Expired</option>
+                        <option value="EXPIRING_SOON">&le; 14 Days</option>
+                        <option value="PENDING_RENEWAL">15 - 30 Days</option>
+                        <option value="ACTIVE">Active</option>
+                        <option value="VACANT">Vacant</option>
+                    </select>
+                </div>
+            </div>
+            <div id="boardList" class="flex-1 overflow-y-auto divide-y divide-slate-800/60 p-2 text-xs">
+                <div class="text-slate-500 p-4 text-center">Loading billboards...</div>
+            </div>
+        </aside>
+
+        <!-- Map Container -->
+        <main class="flex-1 h-full w-full relative">
+            <div id="map"></div>
+        </main>
+    </div>
+
+    <script>
+        let map;
+        let markersLayer;
+        let allBillboards = [];
+
+        const STATUS_CONFIG = {
+            EXPIRED: { colorClass: 'pin-expired', label: 'Expired', badge: 'bg-red-500/20 text-red-400 border-red-500/30' },
+            EXPIRING_SOON: { colorClass: 'pin-soon', label: 'Expiring Soon', badge: 'bg-orange-500/20 text-orange-400 border-orange-500/30' },
+            PENDING_RENEWAL: { colorClass: 'pin-pending', label: 'Pending Renewal', badge: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' },
+            ACTIVE: { colorClass: 'pin-active', label: 'Active', badge: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
+            VACANT: { colorClass: 'pin-vacant', label: 'Vacant', badge: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' }
+        };
+
+        function initMap() {
+            if (typeof L === 'undefined') {
+                console.error("Leaflet library failed to load.");
+                return;
+            }
+
+            map = L.map('map', {
+                center: [40.7306, -73.96],
+                zoom: 12
+            });
+
+            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: '&copy; OpenStreetMap'
+            }).addTo(map);
+
+            markersLayer = L.layerGroup().addTo(map);
+
+            // Force layout recalculation after mounting
+            setTimeout(() => { map.invalidateSize(); }, 200);
+        }
+
+        async function fetchAreas() {
+            try {
+                const res = await fetch('/api/billboards/areas');
+                if (!res.ok) return;
+                const areas = await res.json();
+                const select = document.getElementById('areaFilter');
+                areas.forEach(area => {
+                    const opt = document.createElement('option');
+                    opt.value = area;
+                    opt.textContent = area;
+                    select.appendChild(opt);
+                });
+            } catch (err) {
+                console.error("Areas fetch error:", err);
+            }
+        }
+
+        async function fetchBillboards() {
+            try {
+                const res = await fetch('/api/billboards');
+                if (!res.ok) {
+                    document.getElementById('boardList').innerHTML = `<div class="p-4 text-red-400 text-center">Failed to fetch billboards from server.</div>`;
+                    return;
+                }
+                allBillboards = await res.json();
+                updateKpis();
+                filterBoards();
+            } catch (err) {
+                console.error("Billboards fetch error:", err);
+                document.getElementById('boardList').innerHTML = `<div class="p-4 text-red-400 text-center">Error connecting to /api/billboards.</div>`;
+            }
+        }
+
+        function updateKpis() {
+            document.getElementById('count-expired').innerText = allBillboards.filter(b => b.status === 'EXPIRED').length;
+            document.getElementById('count-soon').innerText = allBillboards.filter(b => b.status === 'EXPIRING_SOON').length;
+            document.getElementById('count-pending').innerText = allBillboards.filter(b => b.status === 'PENDING_RENEWAL').length;
+            document.getElementById('count-vacant').innerText = allBillboards.filter(b => b.status === 'VACANT').length;
+        }
+
+        function filterBoards() {
+            const query = (document.getElementById('searchInput').value || '').toLowerCase();
+            const area = document.getElementById('areaFilter').value;
+            const status = document.getElementById('statusFilter').value;
+
+            const filtered = allBillboards.filter(b => {
+                const matchQuery = (b.title && b.title.toLowerCase().includes(query)) ||
+                                   (b.code && b.code.toLowerCase().includes(query)) ||
+                                   (b.currentAdvertiser && b.currentAdvertiser.toLowerCase().includes(query));
+                const matchArea = (area === 'ALL' || b.area === area);
+                const matchStatus = (status === 'ALL' || b.status === status);
+                return matchQuery && matchArea && matchStatus;
+            });
+
+            renderSidebar(filtered);
+            renderMap(filtered);
+        }
+
+        function renderSidebar(boards) {
+            const container = document.getElementById('boardList');
+            container.innerHTML = '';
+
+            if (boards.length === 0) {
+                container.innerHTML = `<div class="p-4 text-slate-500 text-center">No boards match your filter.</div>`;
+                return;
+            }
+
+            boards.forEach(b => {
+                const conf = STATUS_CONFIG[b.status] || STATUS_CONFIG.ACTIVE;
+                const card = document.createElement('div');
+                card.className = 'p-3 hover:bg-slate-800/70 cursor-pointer rounded transition mb-1 bg-slate-900/50 border border-slate-800';
+                card.onclick = () => {
+                    if (map) {
+                        map.flyTo([b.latitude, b.longitude], 15, { duration: 1 });
+                    }
+                };
+
+                card.innerHTML = `
+                    <div class="flex justify-between items-start mb-1">
+                        <span class="font-mono font-bold text-indigo-400">${b.code}</span>
+                        <span class="text-[10px] px-1.5 py-0.5 rounded border ${conf.badge}">${conf.label}</span>
+                    </div>
+                    <div class="font-semibold text-slate-100">${b.title}</div>
+                    <div class="text-[11px] text-slate-400">${b.area} &bull; ${b.type}</div>
+                    <div class="mt-1 text-[11px] text-slate-300">
+                        ${b.isVacant ? '<span class="text-emerald-400">Available</span>' : (b.status === 'EXPIRED' ? '<span class="text-red-400">Expired</span>' : `Expires in <b>${b.daysRemaining}d</b>`)}
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        function renderMap(boards) {
+            if (!markersLayer) return;
+            markersLayer.clearLayers();
+
+            boards.forEach(b => {
+                const conf = STATUS_CONFIG[b.status] || STATUS_CONFIG.ACTIVE;
+                const icon = L.divIcon({
+                    className: '',
+                    html: `<div class="custom-pin ${conf.colorClass}">${b.daysRemaining !== null ? (b.daysRemaining < 0 ? '!' : b.daysRemaining) : 'V'}</div>`,
+                    iconSize: [32, 32],
+                    iconAnchor: [16, 16]
+                });
+
+                const marker = L.marker([b.latitude, b.longitude], { icon: icon });
+                marker.bindPopup(`
+                    <div class="text-slate-900 text-xs">
+                        <p class="font-bold text-sm mb-1">${b.title}</p>
+                        <p><b>Code:</b> ${b.code}</p>
+                        <p><b>Area:</b> ${b.area}</p>
+                        <p><b>Status:</b> ${conf.label}</p>
+                        <p><b>Advertiser:</b> ${b.currentAdvertiser || 'Vacant'}</p>
+                    </div>
+                `);
+                markersLayer.addLayer(marker);
+            });
+        }
+
+        window.addEventListener('load', () => {
+            initMap();
+            fetchAreas();
+            fetchBillboards();
+        });
+    </script>
+</body>
+</html>

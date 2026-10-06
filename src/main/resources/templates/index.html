@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AdSpace - Billboard Expiration Tracker</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Leaflet CSS & JS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            background-color: #020617;
+            color: #f8fafc;
+            overflow: hidden;
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        /* Ensure modals always render above Leaflet map tiles and controls */
+        .modal-layer {
+             z-index: 9999 !important;
+        }
+        #map {
+            width: 100%;
+            height: 100%;
+            background: #0f172a;
+            z-index: 1;
+
+
+        }
+        .custom-pin {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            border-radius: 9999px;
+            color: white;
+            font-weight: 700;
+            font-size: 11px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            border: 2px solid white;
+            cursor: pointer;
+            transition: transform 0.2s ease;
+        }
+        .custom-pin:hover {
+            transform: scale(1.15);
+        }
+        .pin-expired { background: #ef4444; }
+        .pin-soon { background: #f97316; }
+        .pin-pending { background: #eab308; }
+        .pin-active { background: #3b82f6; }
+        .pin-vacant { background: #10b981; }
+
+        .leaflet-popup-content-wrapper {
+            background-color: #0f172a !important;
+            color: #f8fafc !important;
+            border: 1px solid #334155;
+            border-radius: 0.5rem;
+        }
+        .leaflet-popup-tip {
+            background-color: #0f172a !important;
+        }
+    </style>
+</head>
+<body class="flex flex-col h-screen">
+
+    <!-- Top Navigation Header -->
+    <header class="bg-slate-900 border-b border-slate-800 px-6 py-3 flex items-center justify-between z-10 shrink-0">
+        <div class="flex items-center space-x-3">
+            <div class="h-9 w-9 rounded-lg bg-indigo-600 flex items-center justify-center font-black text-lg text-white shadow-md shadow-indigo-600/30">Ad</div>
+            <div>
+                <h1 class="font-bold text-base text-white tracking-wide">AdSpace Tracker</h1>
+                <p class="text-xs text-slate-400">Private Billboard Sales & Expiration Map</p>
+            </div>
+        </div>
+
+        <!-- KPI Status Counters -->
+        <div class="hidden md:flex items-center space-x-2 text-xs">
+            <span class="px-2.5 py-1 rounded-full bg-red-950/70 text-red-400 border border-red-800/50">Expired: <b id="count-expired">0</b></span>
+            <span class="px-2.5 py-1 rounded-full bg-orange-950/70 text-orange-400 border border-orange-800/50">&le; 14d: <b id="count-soon">0</b></span>
+            <span class="px-2.5 py-1 rounded-full bg-amber-950/70 text-amber-400 border border-amber-800/50">Pending: <b id="count-pending">0</b></span>
+            <span class="px-2.5 py-1 rounded-full bg-emerald-950/70 text-emerald-400 border border-emerald-800/50">Vacant: <b id="count-vacant">0</b></span>
+        </div>
+
+        <!-- Action Button -->
+        <button onclick="openAddModal()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-xs font-semibold text-white shadow-md shadow-indigo-600/30 transition flex items-center space-x-1.5">
+            <span>+</span> <span>Add Billboard</span>
+        </button>
+    </header>
+
+    <!-- Workspace Layout -->
+    <div class="flex flex-1 relative overflow-hidden">
+        
+        <!-- Sidebar Directory -->
+        <aside class="w-80 md:w-96 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0 z-10">
+            <div class="p-3 border-b border-slate-800 space-y-2">
+                <input id="searchInput" type="text" placeholder="Search title, ID, client..." class="w-full bg-slate-800/90 border border-slate-700 px-3 py-1.5 rounded text-xs focus:outline-none focus:border-indigo-500 text-white placeholder-slate-400" oninput="filterBoards()"/>
+                
+                <div class="flex space-x-2">
+                    <select id="areaFilter" class="w-1/2 bg-slate-800 border border-slate-700 text-xs text-slate-200 rounded p-1.5 focus:outline-none focus:border-indigo-500" onchange="filterBoards()">
+                        <option value="ALL">All Areas</option>
+                    </select>
+
+                    <select id="statusFilter" class="w-1/2 bg-slate-800 border border-slate-700 text-xs text-slate-200 rounded p-1.5 focus:outline-none focus:border-indigo-500" onchange="filterBoards()">
+                        <option value="ALL">All Statuses</option>
+                        <option value="EXPIRED">Expired</option>
+                        <option value="EXPIRING_SOON">&le; 14 Days</option>
+                        <option value="PENDING_RENEWAL">15 - 30 Days</option>
+                        <option value="ACTIVE">Active (>30d)</option>
+                        <option value="VACANT">Vacant</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- List Cards -->
+            <div id="boardList" class="flex-1 overflow-y-auto divide-y divide-slate-800/60 p-2 space-y-1">
+                <div class="text-slate-500 p-4 text-center text-xs">Loading billboard records...</div>
+            </div>
+        </aside>
+
+        <!-- Interactive Map Container -->
+        <main class="flex-1 h-full w-full relative">
+            <div id="map"></div>
+
+            <!-- Coordinate Picking Helper Banner
+            <div id="pickBanner" class="hidden absolute top-4 left-1/2 -translate-x-1/2 bg-indigo-600/95 text-white px-4 py-2 rounded-lg text-xs font-semibold shadow-xl z-20 flex items-center space-x-3 backdrop-blur-sm border border-indigo-400/50">
+                <span>📍 Click anywhere on the town map to set billboard coordinates</span>
+                <button onclick="cancelCoordinatePicker()" class="underline text-indigo-200 hover:text-white">Cancel</button>
+            </div>
+             -->
+        <!-- Coordinate Picking Helper Banner -->
+        <div id="pickBanner" class="hidden absolute top-4 left-1/2 -translate-x-1/2 bg-indigo-600/95 text-white px-4 py-2 rounded-lg text-xs font-semibold shadow-xl z-[2000] flex items-center space-x-3 backdrop-blur-sm border border-indigo-400/50">
+            <span>📍 Click anywhere on the town map to set billboard coordinates</span>
+             <button onclick="cancelCoordinatePicker()" class="underline text-indigo-200 hover:text-white">Cancel</button>
+        </div>
+
+        </main>
+    </div>
+
+    <!-- MODAL 1: ADD BILLBOARD -->
+   <!-- MODAL 1: ADD BILLBOARD -->
+<div id="addModal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-xl max-w-lg w-full p-6 space-y-4 shadow-2xl overflow-y-auto max-h-[90vh] relative z-[10000]">
+        <!-- modal content remains unchanged -->
+           <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+                <h3 class="text-base font-bold text-white flex items-center space-x-2">
+                    <span class="text-indigo-400">📍</span>
+                    <span>Register New Billboard Location</span>
+                </h3>
+                <button onclick="closeAddModal()" class="text-slate-400 hover:text-white text-lg">&times;</button>
+            </div>
+
+            <form id="addForm" onsubmit="submitAddBillboard(event)" class="space-y-3 text-xs">
+                
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-slate-300 font-semibold mb-1">Board Code *</label>
+                        <input id="newCode" required placeholder="e.g. BLB-106" class="w-full bg-slate-800 border border-slate-700 p-2 rounded text-white focus:outline-none focus:border-indigo-500" />
+                    </div>
+                    <div>
+                        <label class="block text-slate-300 font-semibold mb-1">Town Area / Sector *</label>
+                        <input id="newArea" required placeholder="e.g. Downtown" class="w-full bg-slate-800 border border-slate-700 p-2 rounded text-white focus:outline-none focus:border-indigo-500" />
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-slate-300 font-semibold mb-1">Board Title / Location Name *</label>
+                    <input id="newTitle" required placeholder="e.g. South Bypass LED Megaboard" class="w-full bg-slate-800 border border-slate-700 p-2 rounded text-white focus:outline-none focus:border-indigo-500" />
+                </div>
+
+                <div>
+                    <label class="block text-slate-300 font-semibold mb-1">Street Address</label>
+                    <input id="newAddress" placeholder="e.g. Near City Junction Bridge, Highway 101" class="w-full bg-slate-800 border border-slate-700 p-2 rounded text-white focus:outline-none focus:border-indigo-500" />
+                </div>
+
+                <!-- Coordinates with Pick from Map -->
+                <div>
+                    <div class="flex justify-between items-center mb-1">
+                        <label class="block text-slate-300 font-semibold">Coordinates (Lat & Long) *</label>
+                        <button type="button" onclick="startCoordinatePicker()" class="text-indigo-400 hover:text-indigo-300 underline font-medium">📍 Pick on Map</button>
+                    </div>
+                    <div class="grid grid-cols-2 gap-3">
+                        <input id="newLat" type="number" step="any" required placeholder="Latitude (e.g. 40.7306)" class="w-full bg-slate-800 border border-slate-700 p-2 rounded text-white focus:outline-none focus:border-indigo-500" />
+                        <input id="newLng" type="number" step="any" required placeholder="Longitude (e.g. -73.9352)" class="w-full bg-slate-800 border border-slate-700 p-2 rounded text-white focus:outline-none focus:border-indigo-500" />
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-slate-300 font-semibold mb-1">Billboard Format *</label>
+                        <select id="newType" class="w-full bg-slate-800 border border-slate-700 p-2 rounded text-white focus:outline-none focus:border-indigo-500">
+                            <option value="UNIPOLE">UNIPOLE</option>
+                            <option value="DIGITAL_LED">DIGITAL_LED</option>
+                            <option value="BUS_SHELTER">BUS_SHELTER</option>
+                            <option value="GANTRY">GANTRY</option>
+                            <option value="ROOFTOP">ROOFTOP</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-slate-300 font-semibold mb-1">Dimensions</label>
+                        <input id="newDims" placeholder="e.g. 40x20 ft" class="w-full bg-slate-800 border border-slate-700 p-2 rounded text-white focus:outline-none focus:border-indigo-500" />
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-slate-300 font-semibold mb-1">Monthly Rate ($)</label>
+                        <input id="newRate" type="number" step="any" placeholder="e.g. 4500" class="w-full bg-slate-800 border border-slate-700 p-2 rounded text-white focus:outline-none focus:border-indigo-500" />
+                    </div>
+                    <div>
+                        <label class="block text-slate-300 font-semibold mb-1">Daily Impressions</label>
+                        <input id="newImpressions" type="number" placeholder="e.g. 75000" class="w-full bg-slate-800 border border-slate-700 p-2 rounded text-white focus:outline-none focus:border-indigo-500" />
+                    </div>
+                </div>
+
+                <!-- Initial Contract Status -->
+                <div class="pt-2 border-t border-slate-800 space-y-2">
+                    <label class="flex items-center space-x-2 cursor-pointer">
+                        <input type="checkbox" id="newIsVacant" class="accent-indigo-600 rounded" checked onchange="toggleContractFields()" />
+                        <span class="text-slate-300 font-semibold">Currently Vacant (Ready to Sell)</span>
+                    </label>
+
+                    <div id="contractFields" class="hidden space-y-2 pl-4 border-l-2 border-slate-800">
+                        <div>
+                            <label class="block text-slate-300 font-semibold mb-1">Current Advertiser</label>
+                            <input id="newAdvertiser" placeholder="Brand / Client name" class="w-full bg-slate-800 border border-slate-700 p-2 rounded text-white focus:outline-none focus:border-indigo-500" />
+                        </div>
+                        <div>
+                            <label class="block text-slate-300 font-semibold mb-1">Campaign Name</label>
+                            <input id="newCampaign" placeholder="e.g. Winter Holiday Sale" class="w-full bg-slate-800 border border-slate-700 p-2 rounded text-white focus:outline-none focus:border-indigo-500" />
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div>
+                                <label class="block text-slate-300 font-semibold mb-1">Start Date</label>
+                                <input id="newStartDate" type="date" class="w-full bg-slate-800 border border-slate-700 p-2 rounded text-white focus:outline-none" />
+                            </div>
+                            <div>
+                                <label class="block text-slate-300 font-semibold mb-1">Contract Expiry Date</label>
+                                <input id="newExpiryDate" type="date" class="w-full bg-slate-800 border border-slate-700 p-2 rounded text-white focus:outline-none" />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex justify-end space-x-2 pt-3 border-t border-slate-800">
+                    <button type="button" onclick="closeAddModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded font-medium">Cancel</button>
+                    <button type="submit" class="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded font-bold transition shadow-md shadow-indigo-600/30">Save Billboard</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL 2: RENEW CONTRACT -->
+<div id="renewModal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-xl max-w-md w-full p-6 space-y-4 shadow-2xl relative z-[10000]">
+        <!-- modal content remains unchanged -->
+            <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+                <h3 class="text-base font-bold text-white">Renew / Book Billboard Lease</h3>
+                <button onclick="closeRenewModal()" class="text-slate-400 hover:text-white text-lg">&times;</button>
+            </div>
+            <p id="renewModalSubtitle" class="text-xs text-indigo-400 font-medium"></p>
+
+            <form id="renewForm" onsubmit="submitRenewal(event)" class="space-y-3 text-xs">
+                <input type="hidden" id="renewBoardId" />
+                <div>
+                    <label class="block text-slate-300 font-semibold mb-1">Advertiser / Client *</label>
+                    <input id="renewAdvertiser" type="text" class="w-full bg-slate-800 border border-slate-700 rounded p-2 text-white focus:outline-none focus:border-indigo-500" required />
+                </div>
+                <div>
+                    <label class="block text-slate-300 font-semibold mb-1">Campaign Title *</label>
+                    <input id="renewCampaign" type="text" class="w-full bg-slate-800 border border-slate-700 rounded p-2 text-white focus:outline-none focus:border-indigo-500" required />
+                </div>
+                <div>
+                    <label class="block text-slate-300 font-semibold mb-1">Extend Lease Duration *</label>
+                    <select id="renewMonths" class="w-full bg-slate-800 border border-slate-700 rounded p-2 text-white focus:outline-none focus:border-indigo-500">
+                        <option value="1">1 Month</option>
+                        <option value="3">3 Months</option>
+                        <option value="6" selected>6 Months</option>
+                        <option value="12">12 Months (1 Year)</option>
+                    </select>
+                </div>
+                <div class="flex justify-end space-x-2 pt-3 border-t border-slate-800">
+                    <button type="button" onclick="closeRenewModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded font-medium">Cancel</button>
+                    <button type="submit" class="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded font-bold transition shadow-md shadow-indigo-600/30">Apply Renewal</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Application JavaScript Engine -->
+    <script>
+        let map;
+        let markersLayer;
+        let tempMarker;
+        let isPickingCoords = false;
+        let allBillboards = [];
+
+        const STATUS_CONFIG = {
+            EXPIRED: { colorClass: 'pin-expired', label: 'Expired', badge: 'bg-red-500/20 text-red-400 border-red-500/30' },
+            EXPIRING_SOON: { colorClass: 'pin-soon', label: 'Expiring Soon', badge: 'bg-orange-500/20 text-orange-400 border-orange-500/30' },
+            PENDING_RENEWAL: { colorClass: 'pin-pending', label: 'Pending Renewal', badge: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' },
+            ACTIVE: { colorClass: 'pin-active', label: 'Active', badge: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
+            VACANT: { colorClass: 'pin-vacant', label: 'Vacant', badge: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' }
+        };
+
+        function initMap() {
+            if (typeof L === 'undefined') {
+                console.error("Leaflet library failed to load.");
+                return;
+            }
+
+            map = L.map('map', {
+                center: [40.7306, -73.96],
+                zoom: 12
+            });
+
+            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: '&copy; OpenStreetMap'
+            }).addTo(map);
+
+            markersLayer = L.layerGroup().addTo(map);
+
+            // Click listener for coordinate picking mode
+            map.on('click', function(e) {
+                if (!isPickingCoords) return;
+                const { lat, lng } = e.latlng;
+                document.getElementById('newLat').value = lat.toFixed(6);
+                document.getElementById('newLng').value = lng.toFixed(6);
+
+                if (tempMarker) map.removeLayer(tempMarker);
+                tempMarker = L.marker([lat, lng]).addTo(map);
+
+                cancelCoordinatePicker();
+                openAddModal();
+            });
+
+            setTimeout(() => { map.invalidateSize(); }, 200);
+        }
+
+        async function fetchAreas() {
+            try {
+                const res = await fetch('/api/billboards/areas');
+                if (!res.ok) return;
+                const areas = await res.json();
+                const select = document.getElementById('areaFilter');
+                select.innerHTML = '<option value="ALL">All Areas</option>';
+                areas.forEach(area => {
+                    const opt = document.createElement('option');
+                    opt.value = area;
+                    opt.textContent = area;
+                    select.appendChild(opt);
+                });
+            } catch (err) {
+                console.error("Areas fetch error:", err);
+            }
+        }
+
+        async function fetchBillboards() {
+            try {
+                const res = await fetch('/api/billboards');
+                if (!res.ok) throw new Error("HTTP error " + res.status);
+                allBillboards = await res.json();
+                updateKpis();
+                filterBoards();
+            } catch (err) {
+                console.error("Billboards fetch error:", err);
+                document.getElementById('boardList').innerHTML = `<div class="p-4 text-red-400 text-center text-xs">Error connecting to /api/billboards</div>`;
+            }
+        }
+
+        function updateKpis() {
+            document.getElementById('count-expired').innerText = allBillboards.filter(b => b.status === 'EXPIRED').length;
+            document.getElementById('count-soon').innerText = allBillboards.filter(b => b.status === 'EXPIRING_SOON').length;
+            document.getElementById('count-pending').innerText = allBillboards.filter(b => b.status === 'PENDING_RENEWAL').length;
+            document.getElementById('count-vacant').innerText = allBillboards.filter(b => b.status === 'VACANT').length;
+        }
+
+        function filterBoards() {
+            const query = (document.getElementById('searchInput').value || '').toLowerCase().trim();
+            const area = document.getElementById('areaFilter').value;
+            const status = document.getElementById('statusFilter').value;
+
+            const filtered = allBillboards.filter(b => {
+                const matchQuery = (b.title && b.title.toLowerCase().includes(query)) ||
+                                   (b.code && b.code.toLowerCase().includes(query)) ||
+                                   (b.currentAdvertiser && b.currentAdvertiser.toLowerCase().includes(query));
+                const matchArea = (area === 'ALL' || b.area === area);
+                const matchStatus = (status === 'ALL' || b.status === status);
+                return matchQuery && matchArea && matchStatus;
+            });
+
+            renderSidebar(filtered);
+            renderMap(filtered);
+        }
+
+        function renderSidebar(boards) {
+            const container = document.getElementById('boardList');
+            container.innerHTML = '';
+
+            if (boards.length === 0) {
+                container.innerHTML = `<div class="p-4 text-slate-500 text-center text-xs">No matching billboards found.</div>`;
+                return;
+            }
+
+            boards.forEach(b => {
+                const conf = STATUS_CONFIG[b.status] || STATUS_CONFIG.ACTIVE;
+                const card = document.createElement('div');
+                card.className = 'p-3 hover:bg-slate-800/80 cursor-pointer rounded-lg transition mb-1 bg-slate-900/60 border border-slate-800/90 shadow-sm';
+                card.onclick = () => focusBillboard(b.id);
+
+                const expirySnippet = b.isVacant 
+                    ? `<span class="text-emerald-400 font-semibold">Vacant & Ready to Book</span>`
+                    : (b.status === 'EXPIRED'
+                        ? `<span class="text-red-400 font-semibold">Expired ${Math.abs(b.daysRemaining)} days ago</span>`
+                        : `<span class="text-slate-300">Expires in <b class="text-white font-bold">${b.daysRemaining}d</b> (${b.expiryDate})</span>`);
+
+                card.innerHTML = `
+                    <div class="flex justify-between items-start mb-1">
+                        <span class="font-mono font-bold text-indigo-400 text-xs">${b.code}</span>
+                        <span class="text-[10px] px-2 py-0.5 rounded-full border ${conf.badge}">${conf.label}</span>
+                    </div>
+                    <div class="font-bold text-slate-100 text-sm line-clamp-1">${b.title}</div>
+                    <div class="text-[11px] text-slate-400 mb-1">${b.area} &bull; ${b.type} (${b.dimensions || 'N/A'})</div>
+                    <div class="text-[11px] mb-2">${expirySnippet}</div>
+                    <div class="flex justify-between items-center text-xs pt-1 border-t border-slate-800/50">
+                        <span class="text-slate-400">$${b.monthlyRate ? b.monthlyRate.toLocaleString() : '0'}/mo</span>
+                        <button onclick="event.stopPropagation(); openRenewModal(${b.id})" class="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 rounded text-[11px] font-medium">Renew / Book</button>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        function renderMap(boards) {
+            if (!markersLayer) return;
+            markersLayer.clearLayers();
+
+            boards.forEach(b => {
+                const conf = STATUS_CONFIG[b.status] || STATUS_CONFIG.ACTIVE;
+                const icon = L.divIcon({
+                    className: '',
+                    html: `<div class="custom-pin ${conf.colorClass}">${b.daysRemaining !== null ? (b.daysRemaining < 0 ? '!' : b.daysRemaining) : 'V'}</div>`,
+                    iconSize: [32, 32],
+                    iconAnchor: [16, 16]
+                });
+
+                const marker = L.marker([b.latitude, b.longitude], { icon: icon });
+                marker.bindPopup(`
+                    <div class="p-1 space-y-1.5 text-xs">
+                        <div class="flex justify-between items-center">
+                            <span class="font-mono font-bold text-indigo-400">${b.code}</span>
+                            <span class="text-[10px] px-1.5 py-0.5 rounded border ${conf.badge}">${conf.label}</span>
+                        </div>
+                        <p class="font-bold text-sm text-white">${b.title}</p>
+                        <p class="text-slate-300"><b>Area:</b> ${b.area}</p>
+                        <p class="text-slate-300"><b>Client:</b> ${b.currentAdvertiser || 'Vacant'}</p>
+                        <p class="text-slate-300"><b>Rate:</b> $${b.monthlyRate ? b.monthlyRate.toLocaleString() : '0'}/mo</p>
+                        <button onclick="openRenewModal(${b.id})" class="w-full mt-2 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded transition">Renew / Book Lease</button>
+                    </div>
+                `);
+                markersLayer.addLayer(marker);
+            });
+        }
+
+        function focusBillboard(id) {
+            const b = allBillboards.find(x => x.id === id);
+            if (b && map) {
+                map.flyTo([b.latitude, b.longitude], 15, { animate: true, duration: 1 });
+            }
+        }
+
+        // Modal Controls
+        function openAddModal() {
+            document.getElementById('addModal').classList.remove('hidden');
+        }
+
+        function closeAddModal() {
+            document.getElementById('addModal').classList.add('hidden');
+            if (tempMarker) {
+                map.removeLayer(tempMarker);
+                tempMarker = null;
+            }
+        }
+
+        function toggleContractFields() {
+            const isVacant = document.getElementById('newIsVacant').checked;
+            const fields = document.getElementById('contractFields');
+            if (isVacant) {
+                fields.classList.add('hidden');
+            } else {
+                fields.classList.remove('hidden');
+            }
+        }
+
+        function startCoordinatePicker() {
+            closeAddModal();
+            isPickingCoords = true;
+            document.getElementById('pickBanner').classList.remove('hidden');
+        }
+
+        function cancelCoordinatePicker() {
+            isPickingCoords = false;
+            document.getElementById('pickBanner').classList.add('hidden');
+        }
+
+        async function submitAddBillboard(e) {
+            e.preventDefault();
+            const isVacant = document.getElementById('newIsVacant').checked;
+
+            const payload = {
+                code: document.getElementById('newCode').value.trim(),
+                title: document.getElementById('newTitle').value.trim(),
+                area: document.getElementById('newArea').value.trim(),
+                address: document.getElementById('newAddress').value.trim(),
+                latitude: parseFloat(document.getElementById('newLat').value),
+                longitude: parseFloat(document.getElementById('newLng').value),
+                type: document.getElementById('newType').value,
+                dimensions: document.getElementById('newDims').value.trim(),
+                monthlyRate: parseFloat(document.getElementById('newRate').value) || 0,
+                dailyImpressions: parseInt(document.getElementById('newImpressions').value) || 0,
+                isVacant: isVacant,
+                currentAdvertiser: isVacant ? null : document.getElementById('newAdvertiser').value.trim(),
+                campaignName: isVacant ? null : document.getElementById('newCampaign').value.trim(),
+                startDate: isVacant ? null : (document.getElementById('newStartDate').value || null),
+                expiryDate: isVacant ? null : (document.getElementById('newExpiryDate').value || null)
+            };
+
+            try {
+                const res = await fetch('/api/billboards', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (res.ok) {
+                    closeAddModal();
+                    document.getElementById('addForm').reset();
+                    document.getElementById('newIsVacant').checked = true;
+                    toggleContractFields();
+                    await fetchAreas();
+                    await fetchBillboards();
+                } else {
+                    const err = await res.text();
+                    alert("Error creating billboard: " + err);
+                }
+            } catch (err) {
+                console.error("Submit error:", err);
+                alert("Failed to submit billboard.");
+            }
+        }
+
+        function openRenewModal(id) {
+            const b = allBillboards.find(x => x.id === id);
+            if (!b) return;
+            document.getElementById('renewBoardId').value = b.id;
+            document.getElementById('renewModalSubtitle').innerText = `${b.title} (${b.code})`;
+            document.getElementById('renewAdvertiser').value = b.currentAdvertiser || '';
+            document.getElementById('renewCampaign').value = b.campaignName || '';
+            document.getElementById('renewModal').classList.remove('hidden');
+        }
+
+        function closeRenewModal() {
+            document.getElementById('renewModal').classList.add('hidden');
+        }
+
+        async function submitRenewal(e) {
+            e.preventDefault();
+            const id = document.getElementById('renewBoardId').value;
+            const payload = {
+                additionalMonths: parseInt(document.getElementById('renewMonths').value),
+                advertiser: document.getElementById('renewAdvertiser').value.trim(),
+                campaignName: document.getElementById('renewCampaign').value.trim()
+            };
+
+            try {
+                const res = await fetch(`/api/billboards/${id}/renew`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (res.ok) {
+                    closeRenewModal();
+                    await fetchBillboards();
+                } else {
+                    alert("Failed to renew contract.");
+                }
+            } catch (err) {
+                console.error("Renewal error:", err);
+                alert("Server error occurred during renewal.");
+            }
+        }
+
+        window.addEventListener('load', () => {
+            initMap();
+            fetchAreas();
+            fetchBillboards();
+        });
+    </script>
+</body>
+</html>
