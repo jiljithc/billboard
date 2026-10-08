@@ -1,5 +1,5 @@
 # Stage 1: Build the JAR
-FROM maven:3.9.6-eclipse-temurin-25 AS builder
+FROM maven:3.10-eclipse-temurin-25 AS builder
 WORKDIR /app
 COPY pom.xml .
 RUN mvn dependency:go-offline -B
