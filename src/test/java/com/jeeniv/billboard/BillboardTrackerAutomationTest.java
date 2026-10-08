@@ -1,6 +1,5 @@
 package com.jeeniv.billboard;
 
-import org.junit.jupiter.api.Test;
 import com.jeeniv.billboard.page.BillboardMapPage;
 import io.github.bonigarcia.wdm.WebDriverManager;
 import org.junit.jupiter.api.*;
@@ -22,19 +21,39 @@ class BillboardTrackerAutomationTest {
     private BillboardMapPage mapPage;
     private String baseUrl;
 
-    @BeforeAll
+   @BeforeAll
     static void setupDriver() {
-        // Automatically fetches and configures the matching chromedriver binary
-        WebDriverManager.chromedriver().setup();
+        // If /usr/bin/chromedriver exists (Linux container), skip dynamic download
+        if (new java.io.File("/usr/bin/chromedriver").exists()) {
+            System.setProperty("webdriver.chrome.driver", "/usr/bin/chromedriver");
+        } else {
+            WebDriverManager.chromedriver().setup();
+        }
     }
 
     @BeforeEach
     void init() {
         ChromeOptions options = new ChromeOptions();
-        // Run in headless mode by default (ideal for CI/CD and Mac terminal)
-      //jiljith 6  options.addArguments("--headless=new");
+
+        // 1. Detect macOS vs Linux Chromium binary paths
+        java.io.File macChrome = new java.io.File("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
+        java.io.File linuxChromium = new java.io.File("/usr/bin/chromium");
+        java.io.File linuxChrome = new java.io.File("/usr/bin/google-chrome");
+
+        if (macChrome.exists()) {
+            options.setBinary(macChrome);
+        } else if (linuxChromium.exists()) {
+            options.setBinary(linuxChromium);
+        } else if (linuxChrome.exists()) {
+            options.setBinary(linuxChrome);
+        }
+
+        // 2. Flags essential for running in Docker
+        options.addArguments("--headless=new");
         options.addArguments("--no-sandbox");
         options.addArguments("--disable-dev-shm-usage");
+        options.addArguments("--disable-gpu");
+        options.addArguments("--remote-allow-origins=*");
         options.addArguments("--window-size=1920,1080");
 
         driver = new ChromeDriver(options);
@@ -44,7 +63,6 @@ class BillboardTrackerAutomationTest {
         mapPage = new BillboardMapPage(driver);
         mapPage.waitForPageLoad();
     }
-
     @AfterEach
     void tearDown() {
         if (driver != null) {
