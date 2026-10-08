@@ -10,8 +10,13 @@ pipeline {
     }
 
     tools {
-        maven 'Maven-3.9'
-        jdk 'JDK-21' // Or 'JDK-17' depending on the name set in Manage Jenkins -> Tools
+       // maven 'Maven-3.9'
+       // jdk 'JDK-21' // Or 'JDK-17' depending on the name set in Manage Jenkins -> Tools
+
+        
+        maven 'Maven-3.10'
+        jdk 'JDK-26'
+    
     }
 
     options {
