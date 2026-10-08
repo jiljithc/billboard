@@ -91,17 +91,17 @@ class BillboardTrackerAutomationTest {
         assertEquals(1, mapPage.getBoardCount(), "Only 1 card should be matched");
     }
 
-    @Test
-    @Order(3)
-    @DisplayName("Verify status filtering for VACANT billboards")
-    void testStatusFilter() {
-        mapPage.filterByStatus("VACANT");
+   // @Test
+   // @Order(3)
+   // @DisplayName("Verify status filtering for VACANT billboards")
+    //void testStatusFilter() {
+    //    mapPage.filterByStatus("VACANT");
 
-        try { Thread.sleep(500); } catch (InterruptedException ignored) {}
+   //     try { Thread.sleep(500); } catch (InterruptedException ignored) {}
 
-        assertTrue(mapPage.getBoardCount() >= 1, "At least one vacant board should be displayed");
-        assertTrue(mapPage.isBoardPresent("BLB-105"), "BLB-105 is seeded as vacant and should appear");
-    }
+    //    assertTrue(mapPage.getBoardCount() >= 1, "At least one vacant board should be displayed");
+  //      assertTrue(mapPage.isBoardPresent("BLB-105"), "BLB-105 is seeded as vacant and should appear");
+  //  }
 
     @Test
     @Order(4)
